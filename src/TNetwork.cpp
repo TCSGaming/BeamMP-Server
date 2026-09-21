@@ -28,7 +28,9 @@
 #include "nlohmann/json.hpp"
 #include <CustomAssert.h>
 #include <Http.h>
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <boost/asio/bind_executor.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/address_v4.hpp>
@@ -379,6 +381,45 @@ std::string HashPassword(const std::string& str) {
     return ret.str();
 }
 
+namespace {
+// Fork addition: prefix a compatible client uses on the Key field to signal
+// "this isn't a real auth key, it's a client-declared guest display name".
+// Chosen to be short (the wire Key field is capped at 50 bytes) and very
+// unlikely to collide with a real backend-issued key.
+constexpr std::string_view GuestNamePrefix = "GN:";
+
+// Turns an arbitrary client-supplied string into something safe to use as
+// a display name: strips non-printable bytes and BeamMP's own ^-color
+// formatting codes (so a guest can't visually impersonate staff / use
+// formatting tricks), trims whitespace, and clamps length. Returns "" if
+// nothing usable is left, so the caller can fall back to rejecting it.
+std::string SanitizeClientSuppliedName(const std::string& raw) {
+    std::string out;
+    out.reserve(raw.size());
+    for (size_t i = 0; i < raw.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(raw[i]);
+        if (c == '^' && i + 1 < raw.size()) {
+            // skip BeamMP formatting code (^ + one char), see server-maintenance docs
+            ++i;
+            continue;
+        }
+        if (std::isprint(c)) {
+            out.push_back(static_cast<char>(c));
+        }
+    }
+    // trim leading/trailing whitespace
+    auto notSpace = [](unsigned char ch) { return !std::isspace(ch); };
+    out.erase(out.begin(), std::find_if(out.begin(), out.end(), notSpace));
+    out.erase(std::find_if(out.rbegin(), out.rend(), notSpace).base(), out.end());
+
+    constexpr size_t MaxNameLength = 24;
+    if (out.size() > MaxNameLength) {
+        out.resize(MaxNameLength);
+    }
+    return out;
+}
+}
+
 std::shared_ptr<TClient> TNetwork::Authentication(TConnection&& RawConnection) {
     auto Client = CreateClient(std::move(RawConnection.Socket));
     std::string ip = "";
@@ -444,53 +485,77 @@ std::shared_ptr<TClient> TNetwork::Authentication(TConnection&& RawConnection) {
     std::string AuthKey = Application::Settings.getAsString(Settings::Key::General_AuthKey);
     std::string ClientIp = Client->GetIdentifiers().at("ip");
 
-    nlohmann::json AuthReq { };
-    std::string AuthResStr { };
-    try {
-        AuthReq = nlohmann::json {
-            { "key", Key },
-            { "auth_key", AuthKey },
-            { "client_ip", ClientIp }
-        };
+    bool ClientSuppliedGuestName = Application::Settings.getAsBool(Settings::Key::General_AllowClientSuppliedGuestNames)
+        && Application::Settings.getAsBool(Settings::Key::General_AllowGuests)
+        && Key.size() > GuestNamePrefix.size()
+        && Key.compare(0, GuestNamePrefix.size(), GuestNamePrefix) == 0;
 
-        auto Target = "/pkToUser";
-
-        unsigned int ResponseCode = 0;
-        AuthResStr = Http::POST(Application::GetBackendUrlForAuth() + Target, AuthReq.dump(), "application/json", &ResponseCode);
-
-    } catch (const std::exception& e) {
-        beammp_debugf("Invalid json sent by client, kicking: {}", e.what());
-        ClientKick(*Client, "Invalid Key (invalid UTF8 string)!");
-        return nullptr;
+    if (ClientSuppliedGuestName) {
+        // Fork addition: skip the auth backend entirely for this connection.
+        // This is what makes guest names work even if auth.beammp.com is
+        // unreachable, since nothing here depends on it.
+        std::string RequestedName = SanitizeClientSuppliedName(Key.substr(GuestNamePrefix.size()));
+        if (RequestedName.empty()) {
+            beammp_debug("Client-supplied guest name was empty after sanitization, falling back to normal guest flow");
+            ClientSuppliedGuestName = false;
+        } else {
+            beammp_debug("Client-supplied guest name accepted: \"" + RequestedName + "\"");
+            Client->SetName(RequestedName);
+            Client->SetRoles("guest");
+            Client->SetIsGuest(true);
+            Client->SetIdentifier("ip", ClientIp);
+        }
     }
 
-    beammp_debug("Response from authentication backend: " + AuthResStr);
+    if (!ClientSuppliedGuestName) {
+        nlohmann::json AuthReq { };
+        std::string AuthResStr { };
+        try {
+            AuthReq = nlohmann::json {
+                { "key", Key },
+                { "auth_key", AuthKey },
+                { "client_ip", ClientIp }
+            };
 
-    try {
-        nlohmann::json AuthRes = nlohmann::json::parse(AuthResStr);
+            auto Target = "/pkToUser";
 
-        if (AuthRes["username"].is_string() && AuthRes["username"].size() > 0 && AuthRes["roles"].is_string()
-            && AuthRes["guest"].is_boolean() && AuthRes["identifiers"].is_array()) {
+            unsigned int ResponseCode = 0;
+            AuthResStr = Http::POST(Application::GetBackendUrlForAuth() + Target, AuthReq.dump(), "application/json", &ResponseCode);
 
-            Client->SetName(AuthRes["username"]);
-            Client->SetRoles(AuthRes["roles"]);
-            Client->SetIsGuest(AuthRes["guest"]);
-            for (const auto& ID : AuthRes["identifiers"]) {
-                auto Raw = std::string(ID);
-                auto SepIndex = Raw.find(':');
-                Client->SetIdentifier(Raw.substr(0, SepIndex), Raw.substr(SepIndex + 1));
-            }
-        } else {
-            beammp_error("Invalid authentication data received from authentication backend");
-            ClientKick(*Client, "Invalid authentication data!");
+        } catch (const std::exception& e) {
+            beammp_debugf("Invalid json sent by client, kicking: {}", e.what());
+            ClientKick(*Client, "Invalid Key (invalid UTF8 string)!");
             return nullptr;
         }
-    } catch (const std::exception& e) {
-        beammp_errorf("Client sent invalid key. Error was: {}", e.what());
-        // TODO: we should really clarify that this was a backend response or parsing error
-        ClientKick(*Client, "Invalid key! Please restart your game.");
-        return nullptr;
-    }
+
+        beammp_debug("Response from authentication backend: " + AuthResStr);
+
+        try {
+            nlohmann::json AuthRes = nlohmann::json::parse(AuthResStr);
+
+            if (AuthRes["username"].is_string() && AuthRes["username"].size() > 0 && AuthRes["roles"].is_string()
+                && AuthRes["guest"].is_boolean() && AuthRes["identifiers"].is_array()) {
+
+                Client->SetName(AuthRes["username"]);
+                Client->SetRoles(AuthRes["roles"]);
+                Client->SetIsGuest(AuthRes["guest"]);
+                for (const auto& ID : AuthRes["identifiers"]) {
+                    auto Raw = std::string(ID);
+                    auto SepIndex = Raw.find(':');
+                    Client->SetIdentifier(Raw.substr(0, SepIndex), Raw.substr(SepIndex + 1));
+                }
+            } else {
+                beammp_error("Invalid authentication data received from authentication backend");
+                ClientKick(*Client, "Invalid authentication data!");
+                return nullptr;
+            }
+        } catch (const std::exception& e) {
+            beammp_errorf("Client sent invalid key. Error was: {}", e.what());
+            // TODO: we should really clarify that this was a backend response or parsing error
+            ClientKick(*Client, "Invalid key! Please restart your game.");
+            return nullptr;
+        }
+    } // !ClientSuppliedGuestName
 
     beammp_debug("Name -> " + Client->GetName() + ", Guest -> " + std::to_string(Client->IsGuest()) + ", Roles -> " + Client->GetRoles());
     mServer.ForEachClient([&](const std::weak_ptr<TClient>& ClientPtr) -> bool {

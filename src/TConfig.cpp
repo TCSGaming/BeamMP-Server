@@ -58,6 +58,8 @@ static constexpr std::string_view StrLogChat = "LogChat";
 static constexpr std::string_view EnvStrLogChat = "BEAMMP_LOG_CHAT";
 static constexpr std::string_view StrAllowGuests = "AllowGuests";
 static constexpr std::string_view EnvStrAllowGuests = "BEAMMP_ALLOW_GUESTS";
+static constexpr std::string_view StrAllowClientSuppliedGuestNames = "AllowClientSuppliedGuestNames";
+static constexpr std::string_view EnvStrAllowClientSuppliedGuestNames = "BEAMMP_ALLOW_CLIENT_SUPPLIED_GUEST_NAMES";
 static constexpr std::string_view StrInformationPacket = "InformationPacket";
 static constexpr std::string_view EnvStrInformationPacket = "BEAMMP_INFORMATION_PACKET";
 static constexpr std::string_view StrPassword = "Password";
@@ -140,6 +142,8 @@ void TConfig::FlushToFile() {
     data["General"][StrInformationPacket.data()] = Application::Settings.getAsBool(Settings::Key::General_InformationPacket);
     data["General"][StrAllowGuests.data()] = Application::Settings.getAsBool(Settings::Key::General_AllowGuests);
     SetComment(data["General"][StrAllowGuests.data()].comments(), " Whether to allow guests");
+    data["General"][StrAllowClientSuppliedGuestNames.data()] = Application::Settings.getAsBool(Settings::Key::General_AllowClientSuppliedGuestNames);
+    SetComment(data["General"][StrAllowClientSuppliedGuestNames.data()].comments(), " Fork addition: if true, a compatible modified client may supply its own guest display name directly (e.g. from Steam), bypassing the auth backend for that connection. Only enable this if you trust your player base / know which launcher build they're using, since it is not verified against auth.beammp.com.");
     data["General"][StrIP.data()] = Application::Settings.getAsString(Settings::Key::General_IP);
     SetComment(data["General"][StrIP.data()].comments(), " The IP address to bind the server to, this is NOT related to your public IP. Can be used if your machine has multiple network interfaces");
     data["General"][StrPort.data()] = Application::Settings.getAsInt(Settings::Key::General_Port);
@@ -273,6 +277,7 @@ void TConfig::ParseFromFile(std::string_view name) {
         TryReadValue(data, "General", StrAuthKey, EnvStrAuthKey, Settings::Key::General_AuthKey);
         TryReadValue(data, "General", StrLogChat, EnvStrLogChat, Settings::Key::General_LogChat);
         TryReadValue(data, "General", StrAllowGuests, EnvStrAllowGuests, Settings::Key::General_AllowGuests);
+        TryReadValue(data, "General", StrAllowClientSuppliedGuestNames, EnvStrAllowClientSuppliedGuestNames, Settings::Key::General_AllowClientSuppliedGuestNames);
         // Misc
         TryReadValue(data, "Misc", StrHideUpdateMessages, EnvStrHideUpdateMessages, Settings::Key::Misc_ImScaredOfUpdates);
         TryReadValue(data, "Misc", StrUpdateReminderTime, EnvStrUpdateReminderTime, Settings::Key::Misc_UpdateReminderTime);
@@ -323,6 +328,7 @@ void TConfig::PrintDebug() {
     beammp_debug(std::string(StrLogChat) + ": \"" + (Application::Settings.getAsBool(Settings::Key::General_LogChat) ? "true" : "false") + "\"");
     beammp_debug(std::string(StrResourceFolder) + ": \"" + Application::Settings.getAsString(Settings::Key::General_ResourceFolder) + "\"");
     beammp_debug(std::string(StrAllowGuests) + ": \"" + (Application::Settings.getAsBool(Settings::Key::General_AllowGuests) ? "true" : "false") + "\"");
+    beammp_debug(std::string(StrAllowClientSuppliedGuestNames) + ": \"" + (Application::Settings.getAsBool(Settings::Key::General_AllowClientSuppliedGuestNames) ? "true" : "false") + "\"");
     // special!
     beammp_debug("Key Length: " + std::to_string(Application::Settings.getAsString(Settings::Key::General_AuthKey).length()) + "");
 }

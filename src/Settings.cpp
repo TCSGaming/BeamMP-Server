@@ -36,6 +36,11 @@ Settings::Settings() {
         { General_Debug, false },
         { General_AllowGuests, true },
         { General_InformationPacket, true },
+        // Fork addition: lets a client supply its own guest display name
+        // (e.g. a Steam name) via the key field, bypassing the auth
+        // backend for that one connection. Off by default: an admin has
+        // to opt in, since it changes how unauthenticated names are trusted.
+        { General_AllowClientSuppliedGuestNames, false },
         { Misc_ImScaredOfUpdates, true },
         { Misc_UpdateReminderTime, "30s" }
     };
@@ -56,6 +61,7 @@ Settings::Settings() {
         { { "General", "Debug" }, { General_Debug, READ_WRITE } },
         { { "General", "AllowGuests" }, { General_AllowGuests, READ_WRITE } },
         { { "General", "InformationPacket" }, { General_InformationPacket, READ_WRITE } },
+        { { "General", "AllowClientSuppliedGuestNames" }, { General_AllowClientSuppliedGuestNames, READ_WRITE } },
         { { "Misc", "ImScaredOfUpdates" }, { Misc_ImScaredOfUpdates, READ_WRITE } },
         { { "Misc", "UpdateReminderTime" }, { Misc_UpdateReminderTime, READ_WRITE } }
     };
