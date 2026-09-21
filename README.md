@@ -8,6 +8,37 @@ The server is the point through which all clients communicate. You can write Lua
 
 **For Linux, you __need__ the runtime dependencies, which are listed below under [Runtime Dependencies](#runtime-dependencies)**
 
+## Fork Changes: Client-Supplied Guest Names
+
+This fork adds one opt-in feature on top of upstream `BeamMP-Server`: a way for guests to get a real display name locally, instead of a generic `GuestXXXX`, without depending on `auth.beammp.com` being reachable.
+
+**Why:** normally, every connecting client — guest or forum account — gets named by the server calling out to BeamMP's central `auth.beammp.com/pkToUser` endpoint. If that backend is slow, down, or a guest simply never got a key from it, the server falls back to an anonymous guest ID. This fork adds a second, fully local path that doesn't depend on that backend at all.
+
+**How it works:** a matching patched [BeamMP-Launcher](https://github.com/TCSGaming/BeamMP-Launcher) can send a specially-prefixed key (`GN:<name>`) instead of a real auth key. If this server has the feature enabled, it recognizes that prefix, skips the `auth.beammp.com` call entirely for that connection, sanitizes the supplied name (strips control characters and BeamMP's `^`-color formatting codes, trims whitespace, clamps to 24 characters), and uses it directly as the guest's display name.
+
+**It's off by default and fully backward compatible.** A stock launcher never sends a `GN:`-prefixed key, so nothing changes for normal players unless you turn this on *and* they're using the matching patched launcher.
+
+### Enabling it
+
+In `ServerConfig.toml`, under `[General]`:
+```toml
+AllowGuests = true
+AllowClientSuppliedGuestNames = true
+```
+Both must be `true` — the guest-name feature is gated behind guests being allowed at all.
+
+### Security notes
+
+- The supplied name is **not verified** against anything — there's no proof of Steam (or any) account ownership, only that the connecting launcher chose to send it. Fine for a small private/friends server; a technical player could send any string they want, same as if they'd typed any other guest name.
+- The name is sanitized (control characters stripped, `^`-color codes stripped, 24-character cap) before being used anywhere, so it can't be used to impersonate staff formatting or inject garbage into chat/UI.
+- Everything downstream (duplicate-name checks, roles, bans) works off the same `Client->GetName()` / `Client->IsGuest()` calls regardless of which path set them, so existing server-side Lua plugins don't need any changes.
+
+### Companion repo
+
+This only does anything paired with the matching [BeamMP-Launcher fork](https://github.com/TCSGaming/BeamMP-Launcher), which is what actually sends the `GN:` key — and only to servers explicitly allow-listed in that launcher's `Launcher.cfg`.
+
+---
+
 ## Support + Contact
 
 Feel free to ask any questions via the following channels:
@@ -92,4 +123,4 @@ Other Linux distros: `liblua` of *some kind*.
 Windows: No libraries.
 
 ## Support
-The BeamMP project is supported by community donations via our [Patreon](https://www.patreon.com/BeamMP). This brings perks such as Patreon-only channels on our Discord, early access to new updates, and more server keys. 
+The BeamMP project is supported by community donations via our [Patreon](https://www.patreon.com/BeamMP). This brings perks such as Patreon-only channels on our Discord, early access to new updates, and more server keys.
